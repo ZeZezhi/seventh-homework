@@ -180,5 +180,5 @@ print(f"PHF15 = {peak_count} / (4 × {max_15min}) = {PHF15:.4f}")
 | `hour_distribution.png` | 24小时刷卡分布柱状图（dpi=150） |
 | `route_stops.png` | Top 15 线路平均站数水平柱状图（dpi=150） |
 | `performance_heatmap.png` | 4 维度 × Top 10 服务效率热力图（dpi=150） |
-| `公交驾驶员信息/` | 线路 1101~1120 的驾驶员-车辆对应表（20 个 txt） |
+| `线路驾驶员信息/` | 线路 1101~1120 的驾驶员-车辆对应表（20 个 txt） |
 | `README.md` | 本文件——人机协同报告 |

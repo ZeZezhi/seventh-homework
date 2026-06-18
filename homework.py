@@ -34,49 +34,54 @@ print("=" * 60)
 print("【任务1】数据预处理")
 print("=" * 60)
 
-# 1.1 读取数据
+# --- 1.1 读取数据 ---
+# [人工审核] 使用 pandas.read_csv 读取 CSV 数据文件，encoding='utf-8' 确保中文列名正确解析
 df = pd.read_csv('ICData.csv', encoding='utf-8')
 print(">> 数据基本信息:")
 print(f"   形状 (行数, 列数): {df.shape}")
 print(f"   列名: {list(df.columns)}")
 print(f"\n>> 数据类型:")
-print(df.dtypes)
+print(df.dtypes)   # 查看每列的 pandas 数据类型：int64/float64/object
 print(f"\n>> 前5行数据:")
-print(df.head())
+print(df.head())    # 打印前 5 行，快速检查数据内容是否正常
 
-# 1.2 时间列转换为 pandas datetime 类型，并提取小时
-# 列索引: 1 = 交易时间
-time_col = df.columns[1]
-df[time_col] = pd.to_datetime(df[time_col])
-df['hour'] = df[time_col].dt.hour
+# --- 1.2 时间列转换（重点：时间解析） ---
+# [人工审核] CSV 中"交易时间"列默认为字符串（object 类型），必须转为 pandas datetime 才能提取小时/分钟
+# [人工审核] 使用 .columns[1] 动态获取列名，避免硬编码中文列名
+# [人工审核] dt.hour 从 datetime 对象中提取小时（0~23），存储为新的 'hour' 列
+time_col = df.columns[1]                     # 列索引1 = "交易时间"
+df[time_col] = pd.to_datetime(df[time_col])  # str → datetime64，支持时间运算
+df['hour'] = df[time_col].dt.hour            # 提取小时部分（0~23），用于后续按小时聚合
 print(f"\n>> 已将 '{time_col}' 转换为 datetime 类型，并提取 'hour' 列")
-print(f"   hour 范围: {df['hour'].min()} ~ {df['hour'].max()}")
+print(f"   hour 范围: {df['hour'].min()} ~ {df['hour'].max()}")  # 验证小时值在 0~23 范围内
 
-# 1.3 计算 ride_stops = |下车站点 - 上车站点|
-# 保留原始列名以便后续使用
-boarding_col = df.columns[6]   # 上车站点
-alighting_col = df.columns[7]  # 下车站点
-df['ride_stops'] = (df[alighting_col] - df[boarding_col]).abs()
+# --- 1.3 计算乘坐站数 ride_stops ---
+# [人工审核] ride_stops = |下车站点 - 上车站点|，绝对值确保得到非负站数
+# [人工审核] ride_stops == 0 意味着上下车站点相同，属于异常记录（乘客不可能在同一站上下车），需要删除
+boarding_col = df.columns[6]   # 列索引6 = "上车站点"
+alighting_col = df.columns[7]  # 列索引7 = "下车站点"
+df['ride_stops'] = (df[alighting_col] - df[boarding_col]).abs()  # 计算 |下车站点 - 上车站点|
 print(f"\n>> 已创建 ride_stops 列 (|{alighting_col} - {boarding_col}|)")
 print(f"   ride_stops 前5个值: {df['ride_stops'].head().tolist()}")
 
-# 删除 ride_stops == 0 的异常记录
+# [人工审核] 布尔索引筛选 ride_stops != 0 的正常记录，使用 .sum() 统计异常数量
 anomaly_count = (df['ride_stops'] == 0).sum()
 print(f"\n>> ride_stops == 0 的异常记录数: {anomaly_count}")
-df = df[df['ride_stops'] != 0].copy()
+df = df[df['ride_stops'] != 0].copy()  # 只保留 ride_stops > 0 的记录，.copy() 避免后续操作产生 SettingWithCopyWarning
 print(f"   删除后数据形状: {df.shape}")
 
-# 1.4 缺失值检查
+# --- 1.4 缺失值检查 ---
+# [人工审核] isnull().sum() 统计每列缺失值数量。如有缺失，dropna() 删除所有含 NaN 的行
 missing = df.isnull().sum()
 print(f"\n>> 各列缺失值统计:")
 print(missing)
-# 删除含缺失值的行
-missing_rows = df.isnull().any(axis=1).sum()
+# 删除含缺失值的行（如果存在）
+missing_rows = df.isnull().any(axis=1).sum()  # 统计至少含一个缺失值的行数
 if missing_rows > 0:
     df = df.dropna().copy()
     print(f"   已删除 {missing_rows} 条含缺失值的记录")
 else:
-    print("   未发现缺失值，无需删除")
+    print("   未发现缺失值，无需删除")  # 本数据集数据质量较好，无缺失值
 print(f"   最终数据形状: {df.shape}")
 
 # ============================================================
@@ -87,12 +92,16 @@ print("【任务2】时间分布分析")
 print("=" * 60)
 
 # --- 2(a) 使用 numpy 统计凌晨与深夜刷卡量 ---
-total_swipes = len(df)
+# [人工审核] 硬性要求：此处必须使用 numpy.where + numpy.sum，不能用 pandas 条件筛选替代
+total_swipes = len(df)  # 总刷卡记录数
 
-# 使用 numpy.where 条件统计
+# [人工审核] np.where(条件, True, False)：对 hour 列（numpy 数组）逐元素判断
+# [人工审核] hour < 7  → 凌晨时段（0:00 ~ 6:59）
+# [人工审核] hour >= 22 → 深夜时段（22:00 ~ 23:59）
 early_morning_mask = np.where(df['hour'].values < 7, True, False)
 late_night_mask = np.where(df['hour'].values >= 22, True, False)
 
+# [人工审核] np.sum(布尔数组)：True 计为 1，False 计为 0，求和即满足条件的记录数
 early_morning_count = np.sum(early_morning_mask)
 late_night_count = np.sum(late_night_mask)
 
@@ -103,12 +112,14 @@ print(f"   深夜时段 (hour >= 22): {late_night_count} 次 "
       f"({late_night_count / total_swipes * 100:.2f}%)")
 
 # --- 2(b) matplotlib 24小时刷卡量分布柱状图 ---
+# [人工审核] 使用 matplotlib.pyplot.bar 直接绘制，不能用 seaborn 替代
+# [人工审核] value_counts() 按小时统计并 sort_index() 按 0~23 排序
 hour_counts = df['hour'].value_counts().sort_index()
-# 确保0-23小时全部出现
+# [人工审核] np.arange(24) 生成 0~23 的数组，用 .get(h, 0) 补全缺失小时的数据为 0
 all_hours = np.arange(24)
 counts_array = np.array([hour_counts.get(h, 0) for h in all_hours])
 
-# 颜色映射: 凌晨(<7)和深夜(>=22)用不同颜色
+# [人工审核] 颜色映射：凌晨(<7)橙色、常规(7~21)钢蓝、深夜(>=22)紫色，便于视觉区分
 colors = []
 for h in all_hours:
     if h < 7:
@@ -121,22 +132,23 @@ for h in all_hours:
 fig, ax = plt.subplots(figsize=(12, 6))
 bars = ax.bar(all_hours, counts_array, color=colors, edgecolor='white', linewidth=0.5)
 
-# 在柱顶标注数值
+# [人工审核] 在每根柱顶部标注对应数值，方便直接读图
 for bar_obj, val in zip(bars, counts_array):
     if val > 0:
         ax.text(bar_obj.get_x() + bar_obj.get_width()/2.,
                 bar_obj.get_height() + max(counts_array)*0.01,
                 str(val), ha='center', va='bottom', fontsize=7)
 
+# [人工审核] 图表标题、坐标轴标签必须使用英文（作业要求）
 ax.set_title('24-Hour Swipe Distribution', fontsize=14, fontweight='bold')
 ax.set_xlabel('Hour of Day', fontsize=12)
 ax.set_ylabel('Number of Swipes', fontsize=12)
 ax.set_xticks(all_hours)
-ax.set_xticklabels(all_hours)  # 水平标签
+ax.set_xticklabels(all_hours)  # 水平显示小时标签
 ax.set_xlim(-0.8, 23.8)
 ax.grid(axis='y', alpha=0.3)
 
-# 图例
+# [人工审核] 自定义图例，解释三种颜色的含义
 from matplotlib.patches import Patch
 legend_elements = [
     Patch(facecolor='#FF8C00', label='Early Morning (< 7:00)'),
@@ -177,52 +189,57 @@ def analyze_route_stops(df, route_col='线路号', stops_col='ride_stops'):
         包含三列：route_col, 'mean_stops', 'std_stops'，
         按 mean_stops 降序排列。
     """
-    # 分组聚合：均值与标准差
+    # [人工审核] 使用 groupby 按线路分组，agg 同时计算均值和标准差
+    # [人工审核] mean_stops = 该线路所有乘客乘坐站数的算术平均
+    # [人工审核] std_stops = 该线路乘坐站数的标准差，反映乘客乘坐站数的离散程度
     route_stats = df.groupby(route_col)[stops_col].agg(
-        mean_stops='mean',
-        std_stops='std'
+        mean_stops='mean',    # 平均乘坐站数
+        std_stops='std'       # 标准差
     ).reset_index()
-    # 按均值降序排序
+    # [人工审核] 按 mean_stops 降序排列，使乘坐距离长的线路排在前面
     route_stats = route_stats.sort_values('mean_stops', ascending=False).reset_index(drop=True)
     return route_stats
 
 
-# 获取数据中的实际线路列名
-route_col_name = df.columns[4]  # 线路号
+# [人工审核] 调用 analyze_route_stops 函数，传入数据中实际的线路列名
+route_col_name = df.columns[4]  # 列索引4 = "线路号"
 route_result = analyze_route_stops(df, route_col=route_col_name, stops_col='ride_stops')
 print("\n>> 线路平均乘坐站数及标准差 (前10行):")
 print(route_result.head(10).to_string(index=False))
 
-# Seaborn 水平柱状图 — Top 15 线路
+# --- Seaborn 水平柱状图 — Top 15 线路 ---
+# [人工审核] 取 mean_stops 最高的前 15 条线路进行可视化
 top15 = route_result.head(15).copy()
-# 反转以便在水平柱状图中自上而下显示最高值
+# [人工审核] 将数据反转（iloc[::-1]），使最高值出现在水平柱状图最上方
 top15 = top15.iloc[::-1]
 
 fig, ax = plt.subplots(figsize=(10, 8))
-# 使用 seaborn barplot
-# 为 seaborn v0.13+ 兼容，使用 hue 参数替代 palette
+# [人工审核] 使用 seaborn.barplot 绘制水平柱状图（不能用 matplotlib 替代）
+# [人工审核] hue 参数用于解决新版 seaborn(v0.13+) 中 palette 参数的兼容性问题
 sns.barplot(
     data=top15,
-    y=top15[route_col_name].astype(str),
-    x='mean_stops',
-    hue=top15[route_col_name].astype(str),
-    palette='Blues_d',
-    legend=False,
+    y=top15[route_col_name].astype(str),  # 线路号作为 y 轴分类标签
+    x='mean_stops',                        # 平均站数作为数值轴
+    hue=top15[route_col_name].astype(str), # 与 y 相同，使每个线路独立配色
+    palette='Blues_d',                     # 蓝色系渐变色板
+    legend=False,                           # 隐藏冗余图例
     ax=ax
 )
 
-# 手动添加误差线 (兼容各版本 seaborn)
-# 取标准差
-std_vals = top15['std_stops'].values
-mean_vals = top15['mean_stops'].values
-y_positions = range(len(top15))
+# [人工审核] 手动叠加误差线——用 matplotlib.errorbar 添加标准差横线
+# [人工审核] xerr=std_vals：水平方向的误差线长度为标准差
+# [人工审核] capsize=0.3：误差线末端小横线长度（按题目要求）
+std_vals = top15['std_stops'].values     # 每条线路的标准差
+mean_vals = top15['mean_stops'].values   # 每条线路的平均值
+y_positions = range(len(top15))          # 条形的位置 (0, 1, 2, ..., 14)
 ax.errorbar(mean_vals, y_positions, xerr=std_vals,
             fmt='none', ecolor='black', capsize=0.3, elinewidth=0.8, alpha=0.7)
 
+# [人工审核] 图表标题和轴标签使用英文（作业要求）
 ax.set_title('Top 15 Routes by Average Ride Stops', fontsize=14, fontweight='bold')
 ax.set_xlabel('Average Number of Stops', fontsize=12)
 ax.set_ylabel('Route Number', fontsize=12)
-ax.set_xlim(0, top15['mean_stops'].max() * 1.2)
+ax.set_xlim(0, top15['mean_stops'].max() * 1.2)  # x 轴范围从 0 开始
 
 plt.tight_layout()
 plt.savefig('route_stops.png', dpi=150)
@@ -236,48 +253,58 @@ print("\n" + "=" * 60)
 print("【任务4】高峰小时系数 (Peak Hour Factor) 计算")
 print("=" * 60)
 
-# 4.1 统计每个小时的刷卡量，自动找出高峰小时
+# ── 第一步：按小时聚合刷卡量，自动识别高峰小时 ──
+# [人工审核] groupby('hour').size() 统计每个小时（0~23）的刷卡次数
 hourly_counts = df.groupby('hour').size()
+# [人工审核] idxmax() 返回刷卡量最大的小时编号（如 9 表示 09:00~09:59 是高峰小时）
 peak_hour = hourly_counts.idxmax()
+# [人工审核] .max() 获取高峰小时的总刷卡次数（分母的一部分）
 peak_count = hourly_counts.max()
 print(f"\n>> 高峰小时识别:")
 print(f"   高峰小时为 {peak_hour:02d}:00 ~ {peak_hour:02d}:59，刷卡量 {peak_count} 次")
 
-# 4.2 提取高峰小时内的数据
+# ── 第二步：提取高峰小时内的数据，解析分钟信息 ──
+# [人工审核] 用布尔索引筛选高峰小时的所有记录，.copy() 避免 SettingWithCopyWarning
 peak_df = df[df['hour'] == peak_hour].copy()
-# 获取分钟 (精确到分钟)
+# [人工审核] dt.minute 从交易时间中提取分钟值（0~59），这是分钟粒度聚合的基础
 peak_df['minute'] = peak_df[time_col].dt.minute
 
-# --- PHF5: 按5分钟窗口聚合 ---
-# 将分钟按5分钟窗口分组: 0-4 → 窗口0, 5-9 → 窗口1, ...
+# ── PHF5: 以 5 分钟为窗口聚合 ──
+# [人工审核] 核心操作：整数除法将 0~59 分钟映射到 5 分钟窗口编号
+# minute // 5 的结果：0~4→0, 5~9→1, 10~14→2, ..., 55~59→11（共12个窗口）
 peak_df['min5_bin'] = peak_df['minute'] // 5
+# [人工审核] 按窗口编号分组，统计每个 5 分钟窗口内的刷卡量
 min5_counts = peak_df.groupby('min5_bin').size()
+# [人工审核] .max() 取出 12 个窗口中刷卡量的最高值（公式分母的核心）
 max_5min = min5_counts.max()
+# [人工审核] .idxmax() 定位最高值对应的窗口编号，用于输出该窗口的时间范围
 max_5min_bin = min5_counts.idxmax()
-max_5min_start = max_5min_bin * 5
-max_5min_end = max_5min_start + 4
 
+# [人工审核] PHF5 公式：高峰小时总量 / (12 × 最高5分钟窗口刷卡量)
+# 分母的 12 来源于：1 小时 = 60 分钟，60 ÷ 5 = 12 个窗口
 PHF5 = peak_count / (12 * max_5min)
 print(f"\n>> PHF5 计算:")
 print(f"   最高5分钟刷卡量: {peak_hour:02d}:{max_5min_bin*5:02d}~"
       f"{peak_hour:02d}:{max_5min_bin*5+4:02d}，{max_5min} 次")
-print(f"   PHF5 = {peak_count} / (12 × {max_5min}) = {PHF5:.4f}")
+print(f"   PHF5 = {peak_count} / (12 × {max_5min}) = {PHF5:.4f}")  # :.4f 保留4位小数
 
-# --- PHF15: 按15分钟窗口聚合 ---
+# ── PHF15: 以 15 分钟为窗口聚合 ──
+# [人工审核] 与 PHF5 同理，但窗口扩大为 15 分钟
+# minute // 15 的结果：0~14→0, 15~29→1, 30~44→2, 45~59→3（共4个窗口）
 peak_df['min15_bin'] = peak_df['minute'] // 15
 min15_counts = peak_df.groupby('min15_bin').size()
 max_15min = min15_counts.max()
 max_15min_bin = min15_counts.idxmax()
-max_15min_start = max_15min_bin * 15
-max_15min_end = max_15min_start + 14
 
+# [人工审核] PHF15 公式：高峰小时总量 / (4 × 最高15分钟窗口刷卡量)
+# 分母的 4 来源于：1 小时 = 60 分钟，60 ÷ 15 = 4 个窗口
 PHF15 = peak_count / (4 * max_15min)
 print(f"\n>> PHF15 计算:")
 print(f"   最高15分钟刷卡量: {peak_hour:02d}:{max_15min_bin*15:02d}~"
       f"{peak_hour:02d}:{max_15min_bin*15+14:02d}，{max_15min} 次")
 print(f"   PHF15 = {peak_count} / (4 × {max_15min}) = {PHF15:.4f}")
 
-# 格式化输出
+# ── 按作业要求的格式输出 ──
 print(f"\n>> 完整输出格式:")
 print(f"   高峰小时: {peak_hour:02d}:00 ~ {peak_hour:02d}:59，刷卡量 {peak_count} 次")
 print(f"   最高5分钟刷卡量: {peak_hour:02d}:{max_5min_bin*5:02d}~"
@@ -294,41 +321,44 @@ print("\n" + "=" * 60)
 print("【任务5】线路驾驶员信息提取")
 print("=" * 60)
 
-# 5.1 筛选线路号在 1101 ~ 1120 之间的记录
+# --- 5.1 筛选线路号在 1101 ~ 1120 之间的记录 ---
+# [人工审核] 列索引定义：4=线路号, 5=车辆编号, 8=驾驶员编号
 route_col = df.columns[4]     # 线路号
 vehicle_col = df.columns[5]   # 车辆编号
 driver_col = df.columns[8]    # 驾驶员编号
 
+# [人工审核] 布尔索引筛选：线路号 >= 1101 且 <= 1120（共20条线路）
 filtered_df = df[(df[route_col] >= 1101) & (df[route_col] <= 1120)].copy()
 print(f"\n>> 筛选线路 1101~1120, 共 {len(filtered_df)} 条记录")
 
-# 5.2 创建输出目录
-output_dir = '公交驾驶员信息'
-os.makedirs(output_dir, exist_ok=True)
+# --- 5.2 创建输出目录 ---
+# [人工审核] 按作业要求在根目录下创建名为 "线路驾驶员信息" 的文件夹
+output_dir = '线路驾驶员信息'
+os.makedirs(output_dir, exist_ok=True)  # exist_ok=True 避免重复创建报错
 
-# 5.3 为每条线路生成 txt 文件
-unique_routes = sorted(filtered_df[route_col].unique())
+# --- 5.3 为每条线路生成 txt 文件 ---
+unique_routes = sorted(filtered_df[route_col].unique())  # 按线路号升序排列
 file_count = 0
 
 for route in unique_routes:
+    # [人工审核] 筛选属于当前线路的所有记录
     route_data = filtered_df[filtered_df[route_col] == route]
-    # 按车辆编号分组，对驾驶员去重，形成 车辆-驾驶员 对应关系
-    # 取每个线路中出现的 (车辆编号, 驾驶员编号) 去重组合
+    # [人工审核] drop_duplicates() 去除重复的 (车辆编号, 驾驶员编号) 组合
+    # [人工审核] 然后按车辆编号升序排列
     pairs = route_data[[vehicle_col, driver_col]].drop_duplicates()
-    # 按车辆编号排序
     pairs = pairs.sort_values(vehicle_col)
 
     filepath = os.path.join(output_dir, f'{route}.txt')
     with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(f'线路号: {route}\n')
+        f.write(f'线路号: {route}\n')              # 首行：线路号
         for _, row in pairs.iterrows():
-            f.write(f'{int(row[vehicle_col])}\t{int(row[driver_col])}\n')
+            f.write(f'{int(row[vehicle_col])}\t{int(row[driver_col])}\n')  # 车辆编号\t驾驶员编号
     file_count += 1
 
 print(f"\n>> 已在 '{output_dir}/' 目录下生成 {file_count} 个 txt 文件")
 print(f"   线路列表: {unique_routes}")
 
-# 打印第一个文件的内容示例
+# [人工审核] 打印第一个文件内容作为验证样例
 sample_file = os.path.join(output_dir, f'{unique_routes[0]}.txt')
 print(f"\n>> 样例文件 '{unique_routes[0]}.txt' 内容:")
 with open(sample_file, 'r', encoding='utf-8') as f:
@@ -341,41 +371,42 @@ print("\n" + "=" * 60)
 print("【任务6】运行效率热力图")
 print("=" * 60)
 
-# 6.1 计算各维度的服务人次（每行=1人次）
-# 统计 Top 10 驾驶员
+# ── 6.1 统计各维度的服务人次（每行 = 1 人次）──
+# [人工审核] 驾驶员维度：value_counts() 按降序统计每个驾驶员的服务人次
 driver_rides = df[driver_col].value_counts().head(10)
 top10_drivers = driver_rides.index.tolist()
 print(f"\n>> Top 10 驾驶员 (人次):")
 for i, (driver, count) in enumerate(driver_rides.items(), 1):
     print(f"   {i}. 驾驶员 {int(driver)}: {count} 次")
 
-# 统计 Top 10 线路
+# [人工审核] 线路维度：统计每条线路的乘客人次
 route_rides = df[route_col].value_counts().head(10)
 top10_routes = route_rides.index.tolist()
 print(f"\n>> Top 10 线路 (人次):")
 for i, (route, count) in enumerate(route_rides.items(), 1):
     print(f"   {i}. 线路 {int(route)}: {count} 次")
 
-# 统计 Top 10 上车站点
+# [人工审核] 上车站点维度：统计每个站点的上车人次
 boarding_rides = df[boarding_col].value_counts().head(10)
 top10_stations = boarding_rides.index.tolist()
 print(f"\n>> Top 10 上车站点 (人次):")
 for i, (station, count) in enumerate(boarding_rides.items(), 1):
     print(f"   {i}. 站点 {int(station)}: {count} 次")
 
-# 统计 Top 10 车辆
+# [人工审核] 车辆维度：统计每辆车的服务人次
 vehicle_rides = df[vehicle_col].value_counts().head(10)
 top10_vehicles = vehicle_rides.index.tolist()
 print(f"\n>> Top 10 车辆 (人次):")
 for i, (vehicle, count) in enumerate(vehicle_rides.items(), 1):
     print(f"   {i}. 车辆 {int(vehicle)}: {count} 次")
 
-# 6.2 构建 4×10 矩阵用于热力图
-# 行: [Driver, Route, Boarding Station, Vehicle]
-# 列: Top1 ~ Top10
+# ── 6.2 构建 4×10 矩阵用于热力图 ──
+# [人工审核] 4 行 = 4 个分析维度（驾驶员/线路/上车站点/车辆）
+# [人工审核] 10 列 = 每个维度的 Top 1 ~ Top 10
+# [人工审核] 矩阵的每个元素值 = 该维度该排名的服务人次
 heatmap_data = np.zeros((4, 10), dtype=int)
 
-# 行0 = 驾驶员人次 (Top1 ~ Top10)
+# [人工审核] 行0 = 驾驶员人次 (Top1 ~ Top10)
 heatmap_data[0, :] = driver_rides.values
 # 行1 = 线路人次 (Top1 ~ Top10)
 heatmap_data[1, :] = route_rides.values
@@ -384,31 +415,36 @@ heatmap_data[2, :] = boarding_rides.values
 # 行3 = 车辆人次 (Top1 ~ Top10)
 heatmap_data[3, :] = vehicle_rides.values
 
-# 6.3 seaborn heatmap
+# ── 6.3 seaborn heatmap 绘制 ──
 fig, ax = plt.subplots(figsize=(14, 6))
 
+# [人工审核] 行标签和列标签分别对应 4 个维度和 Top 1~10
 row_labels = ['Driver', 'Route', 'Boarding Station', 'Vehicle']
 col_labels = [f'Top{i}' for i in range(1, 11)]
 
+# [人工审核] seaborn.heatmap：annot=True 在每格标注数值，fmt='d' 整数显示
+# [人工审核] cmap='RdYlGn'：红-黄-绿渐变，高值偏绿、低值偏红
+# [人工审核] linewidths=0.5：格间白线宽度，增强可读性
 sns.heatmap(
     heatmap_data,
-    annot=True,
-    fmt='d',
-    cmap='RdYlGn',
-    xticklabels=col_labels,
-    yticklabels=row_labels,
-    linewidths=0.5,
+    annot=True,                    # 每格显示数值
+    fmt='d',                        # 整数格式
+    cmap='RdYlGn',                  # 红-黄-绿配色
+    xticklabels=col_labels,         # X轴：Top1~Top10
+    yticklabels=row_labels,         # Y轴：四个维度
+    linewidths=0.5,                 # 格间白色分隔线
     linecolor='white',
     ax=ax,
-    cbar_kws={'label': 'Number of Rides'}
+    cbar_kws={'label': 'Number of Rides'}  # 颜色条标签
 )
 
+# [人工审核] 图表标题和轴标签使用英文（作业要求）
 ax.set_title('Service Performance Heatmap: Top 10 Entities by Ride Count',
              fontsize=14, fontweight='bold', pad=15)
 ax.set_xlabel('Rank', fontsize=12)
 ax.set_ylabel('Dimension', fontsize=12)
 
-# x轴标签不旋转
+# [人工审核] x 轴标签不旋转（作业要求 rotation=0）
 plt.setp(ax.get_xticklabels(), rotation=0)
 
 plt.tight_layout()
@@ -416,7 +452,7 @@ plt.savefig('performance_heatmap.png', dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n>> 6 热力图已保存为 performance_heatmap.png (dpi=150, bbox_inches='tight')")
 
-# 分析说明 (约50字)
+# ── 6.4 分析说明（约50字，作业要求不超过50词）──
 print("\n>> 热力图分析说明:")
 analysis_text = (
     "From the heatmap, Route 46003 ranks first with 7127 rides, significantly "
@@ -439,5 +475,5 @@ print("  - homework.py (本文件)")
 print("  - hour_distribution.png")
 print("  - route_stops.png")
 print("  - performance_heatmap.png")
-print("  - 公交驾驶员信息/ (20个txt文件)")
-print("  - README.md (待补充)")
+print("  - 线路驾驶员信息/ (20个txt文件)")
+print("  - README.md (人机协同报告)")
